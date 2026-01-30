@@ -1,0 +1,3 @@
+GSE,Drug,clinical_path,gene_path,pathway_path
+GSE41998,Paclitaxel,data/GSE41998/Paclitaxel/group_info_gse41998_Paclitaxel.csv,data/GSE41998/Paclitaxel/GSE41998_heatmap_Paclitaxel.csv,data/GSE41998/Paclitaxel/ssgsea_merged_gse41998_Paclitaxel.csv
+GSE41998,Ixabepilone,data/GSE41998/Ixabepilone/group_info_gse41998_Ixabepilone.csv,data/GSE41998/Ixabepilone/GSE41998_heatmap_Ixabepilone.csv,data/GSE41998/Ixabepilone/ssgsea_merged_gse41998_Ixabepilone.csv
