@@ -1,6 +1,7 @@
 # ==================================================
 # IMPORTS
 # ==================================================
+from ast import expr
 import io
 import pandas as pd
 import numpy as np
@@ -14,9 +15,31 @@ from scipy.stats import ttest_ind
 import umap.umap_ as umap
 
 import matplotlib
+from matplotlib.colors import ListedColormap
+
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+RESPONSE_COLORS = {
+    "Sensitive": "#1f77b4",   # blue
+    "Resistant": "#d62728"    # red
+}
+
+DIRECTION_COLORS = {
+    "Higher in Sensitive": "#1f77b4",   # blue
+    "Higher in Resistant": "#d62728"    # red
+}
+
+CLINICAL_VARS = [
+    "response",
+    "!Sample_characteristics_ch1.1",  # example: ER status
+    "!Sample_characteristics_ch1.2",  # PR status
+    "!Sample_characteristics_ch1.3"   # HER2 status
+]
+
+
 
 
 # ==================================================
@@ -127,7 +150,8 @@ def make_pca(expr, clinical, selected):
         y="PC2",
         color="response",
         hover_name="sample",
-        title=f"PCA (Silhouette = {sil:.2f})"
+        title=f"PCA (Silhouette = {sil:.3f})",
+        color_discrete_map=RESPONSE_COLORS
     )
 
     if selected in df["sample"].values:
@@ -158,7 +182,9 @@ def make_umap(expr, clinical, selected):
         y="UMAP2",
         color="response",
         hover_name="sample",
-        title="UMAP"
+        title="UMAP",
+        color_discrete_map=RESPONSE_COLORS
+
     )
 
     if selected in df["sample"].values:
@@ -175,6 +201,145 @@ def make_umap(expr, clinical, selected):
 # ==================================================
 # HEATMAPS
 # ==================================================
+def build_binary_clinical_matrix(clinical, expr_columns):
+    clin = clinical.set_index(SAMPLE_ID_COL).loc[expr_columns]
+
+    binary = {
+        "response_Resistant": (
+            clin["response"]
+            .astype(str)
+            .str.lower()
+            .eq("resistant")
+            .astype(int)
+        ),
+        "response_Sensitive": (
+            clin["response"]
+            .astype(str)
+            .str.lower()
+            .eq("sensitive")
+            .astype(int)
+        ),
+    }
+
+    mat = pd.DataFrame(binary, index=expr_columns).T
+    return mat
+
+
+    # -----------------------------
+    # ER / PR / HER2
+    # -----------------------------
+    if "er_status" in clin.columns:
+        binary["er_negative"] = (
+            clin["er_status"].astype(str).str.lower().eq("negative").astype(int)
+        )
+
+    if "pr_status" in clin.columns:
+        binary["pr_negative"] = (
+            clin["pr_status"].astype(str).str.lower().eq("negative").astype(int)
+        )
+
+    if "her2_status" in clin.columns:
+        binary["her2stat_negative"] = (
+            clin["her2_status"].astype(str).str.lower().eq("negative").astype(int)
+        )
+
+    # -----------------------------
+    # RESPONSE (THIS IS THE KEY PART)
+    # -----------------------------
+    binary["response_Resistant"] = (
+        clin["response"].astype(str).str.lower().eq("resistant").astype(int)
+    )
+
+    binary["response_Sensitive"] = (
+        clin["response"].astype(str).str.lower().eq("sensitive").astype(int)
+    )
+
+    # -----------------------------
+    # pCR (optional, if you want both)
+    # -----------------------------
+    binary["pcr_No"] = (
+        clin[PCR_COLUMN].astype(str).str.lower().str.contains("no").astype(int)
+    )
+
+    binary["pcr_Yes"] = (
+        clin[PCR_COLUMN].astype(str).str.lower().str.contains("yes").astype(int)
+    )
+
+    # Build matrix: rows = features, columns = samples
+    mat = pd.DataFrame(binary, index=expr_columns).T
+
+    return mat
+
+
+def static_binary_clinical_heatmap(clinical, expr):
+    mat = build_binary_clinical_matrix(clinical, expr.columns)
+
+    # Define red-blue colormap: 0=red, 1=blue
+    cmap = ListedColormap(["#d62728", "#1f77b4"])
+
+    plt.figure(figsize=(14, 2.5))
+    plt.imshow(
+        mat,
+        aspect="auto",
+        cmap=cmap,
+        vmin=0,
+        vmax=1
+    )
+
+    plt.yticks(range(mat.shape[0]), mat.index)
+    plt.xticks(range(mat.shape[1]), mat.columns, rotation=90)
+
+    plt.colorbar(
+        ticks=[0, 1],
+        label="Response",
+    )
+
+    plt.xlabel("Samples")
+    plt.ylabel("Response")
+    plt.title("Clinical Response Heatmap")
+
+    buf = io.BytesIO()
+    plt.savefig(buf, dpi=150, bbox_inches="tight")
+    plt.close()
+    buf.seek(0)
+
+    return buf.getvalue()
+
+
+
+
+
+def interactive_binary_clinical_heatmap(clinical, expr, selected):
+    mat = build_binary_clinical_matrix(clinical, expr.columns)
+
+    fig = px.imshow(
+        mat,
+        aspect="auto",
+        color_continuous_scale=[
+            [0.0, "#d62728"],  # Resistant = red
+            [1.0, "#1f77b4"],  # Sensitive = blue
+        ],
+        title="Clinical Response Heatmap"
+    )
+
+    if selected in mat.columns:
+        fig.add_vline(
+            x=list(mat.columns).index(selected),
+            line_width=3,
+            line_color="black"
+        )
+
+    fig.update_layout(
+        xaxis_title="Samples",
+        yaxis_title="Response"
+    )
+
+    return fig
+
+
+
+
+
 def static_clustermap_png(data, title):
     z = (data - data.mean(axis=1).values[:, None]) / data.std(axis=1).values[:, None]
     z = z.dropna()
@@ -236,19 +401,19 @@ def compute_de(expr, clinical):
 
 def make_volcano(expr, clinical):
     df = compute_de(expr, clinical)
-    return px.scatter(df, x="log2FC", y="neglog10_p", color="direction", hover_name="gene")
+    return px.scatter(df, x="log2FC", y="neglog10_p", color="direction", hover_name="gene",color_discrete_map=DIRECTION_COLORS)
 
 
 def make_ma(expr, clinical):
     df = compute_de(expr, clinical)
-    return px.scatter(df, x="avg_expr", y="log2FC", color="direction", hover_name="gene")
+    return px.scatter(df, x="avg_expr", y="log2FC", color="direction", hover_name="gene",color_discrete_map=DIRECTION_COLORS)
 
 
 # ==================================================
 # STREAMLIT APP
 # ==================================================
 st.set_page_config(page_title="Clinical-Omics Explorer", layout="wide")
-st.write("DEBUG page state:", st.session_state.get("page"))
+
 
 
 if "page" not in st.session_state:
@@ -279,7 +444,7 @@ def render_intro():
 
 def render_dashboard():
 
-    # --- TOP LEFT BACK BUTTON (ALWAYS VISIBLE) ---
+    # --- TOP LEFT BACK BUTTON ---
     with st.container():
         col_back, col_title = st.columns([1, 9])
         with col_back:
@@ -287,9 +452,10 @@ def render_dashboard():
                 st.session_state.page = "intro"
         with col_title:
             st.markdown("## 📊 Analysis Dashboard")
-       
 
-
+    # --------------------------------------------------
+    # Load index + dataset
+    # --------------------------------------------------
     index_df = load_index()
 
     @st.cache_data(show_spinner=True)
@@ -297,7 +463,10 @@ def render_dashboard():
         return load_dataset(index_df, gse, drug)
 
     gse = st.selectbox("Select Study", sorted(index_df.GSE.unique()))
-    drug = st.selectbox("Select Drug", index_df[index_df.GSE == gse].Drug.unique())
+    drug = st.selectbox(
+        "Select Drug",
+        index_df[index_df.GSE == gse].Drug.unique()
+    )
 
     clinical, expr, pathway = cached_dataset(gse, drug)
 
@@ -306,52 +475,136 @@ def render_dashboard():
 
     plot = st.selectbox(
         "Select Plot",
-        ["All plots", "PCA", "UMAP", "Gene Heatmap", "Pathway Heatmap", "Volcano", "MA"]
+        [
+            "All plots",
+            "PCA",
+            "UMAP",
+            "Clinical Heatmap",
+            "Gene Heatmap",
+            "Pathway Heatmap",
+            "Volcano",
+            "MA",
+        ]
     )
 
-    heatmap_mode = st.radio("Heatmap Mode", ["static", "interactive"], horizontal=True)
+    heatmap_mode = st.radio(
+        "Heatmap Mode",
+        ["static", "interactive"],
+        horizontal=True
+    )
 
+    # --------------------------------------------------
+    # Helper: gene / pathway heatmaps
+    # --------------------------------------------------
     def render_heatmap(data, title):
         if heatmap_mode == "static":
-            st.image(static_clustermap_png(data, title), width="stretch")
+            st.image(
+                static_clustermap_png(data, title),
+                use_container_width=True
+            )
         else:
             st.plotly_chart(
                 interactive_heatmap(data, title, selected),
-                width="stretch"
+                use_container_width=True
             )
 
     st.divider()
 
+    # --------------------------------------------------
+    # MAIN PLOTTING LOGIC
+    # --------------------------------------------------
     if plot == "All plots":
+
+        # PCA + UMAP
         c1, c2 = st.columns(2)
-        c1.plotly_chart(make_pca(expr, clinical, selected), width="stretch")
-        c2.plotly_chart(make_umap(expr, clinical, selected), width="stretch")
+        c1.plotly_chart(
+            make_pca(expr, clinical, selected),
+            use_container_width=True
+        )
+        c2.plotly_chart(
+            make_umap(expr, clinical, selected),
+            use_container_width=True
+        )
 
         st.divider()
+
+        # Clinical heatmap
+        st.markdown("### Clinical Response")
+        if heatmap_mode == "static":
+            st.image(
+                static_binary_clinical_heatmap(clinical, expr),
+                use_container_width=True
+            )
+        else:
+            st.plotly_chart(
+                interactive_binary_clinical_heatmap(clinical, expr, selected),
+                use_container_width=True
+            )
+
+        st.divider()
+
+        # Gene heatmap
         render_heatmap(expr, "Gene Expression Heatmap")
 
         st.divider()
+
+        # Pathway heatmap
         render_heatmap(pathway, "Pathway Heatmap")
 
         st.divider()
+
+        # Volcano + MA
         c3, c4 = st.columns(2)
-        c3.plotly_chart(make_volcano(expr, clinical), width="stretch")
-        c4.plotly_chart(make_ma(expr, clinical), width="stretch")
+        c3.plotly_chart(
+            make_volcano(expr, clinical),
+            use_container_width=True
+        )
+        c4.plotly_chart(
+            make_ma(expr, clinical),
+            use_container_width=True
+        )
 
     elif plot == "PCA":
-        st.plotly_chart(make_pca(expr, clinical, selected), width="stretch")
+        st.plotly_chart(
+            make_pca(expr, clinical, selected),
+            use_container_width=True
+        )
+
     elif plot == "UMAP":
-        st.plotly_chart(make_umap(expr, clinical, selected), width="stretch")
+        st.plotly_chart(
+            make_umap(expr, clinical, selected),
+            use_container_width=True
+        )
+
+    elif plot == "Clinical Heatmap":
+        if heatmap_mode == "static":
+            st.image(
+                static_binary_clinical_heatmap(clinical, expr),
+                use_container_width=True
+            )
+        else:
+            st.plotly_chart(
+                interactive_binary_clinical_heatmap(clinical, expr, selected),
+                use_container_width=True
+            )
+
     elif plot == "Gene Heatmap":
         render_heatmap(expr, "Gene Expression Heatmap")
+
     elif plot == "Pathway Heatmap":
         render_heatmap(pathway, "Pathway Heatmap")
+
     elif plot == "Volcano":
-        st.plotly_chart(make_volcano(expr, clinical), width="stretch")
+        st.plotly_chart(
+            make_volcano(expr, clinical),
+            use_container_width=True
+        )
+
     elif plot == "MA":
-        st.plotly_chart(make_ma(expr, clinical), width="stretch")
-
-
+        st.plotly_chart(
+            make_ma(expr, clinical),
+            use_container_width=True
+        )
 if st.session_state.page == "intro":
     render_intro()
 else:
