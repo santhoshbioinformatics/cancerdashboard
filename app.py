@@ -1,9 +1,7 @@
 # ==================================================
-# CLINICAL-OMICS EXPLORER - ULTIMATE EDITION v4.0
+# CLINICAL-OMICS EXPLORER - REFINED EDITION v4.1
 # ==================================================
-# Features: Password, Validation, Navigation, Filters, Tables,
-#           Export, PDF Reports, Dark Mode, Sessions, Auto-Insights,
-#           Enhanced NLP Chatbot
+# Refined UX with genomics-focused design and enhanced analytics
 # ==================================================
 
 from ast import expr
@@ -166,6 +164,13 @@ def apply_custom_css(theme='light'):
         .breadcrumb {{ display: flex; align-items: center; gap: 0.5rem; color: white; font-size: 0.9rem; }}
         .breadcrumb-item {{ opacity: 0.7; }}
         .breadcrumb-item.active {{ opacity: 1; font-weight: bold; }}
+        .computation-panel {{
+            background-color: {card_bg};
+            padding: 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+            margin: 1rem 0;
+        }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -270,6 +275,152 @@ def compute_summary_stats(clinical, expr):
         'top_gene': top['gene'],
         'top_gene_pval': 10 ** (-top['neglog10_p'])
     }
+
+# ==================================================
+# NEW: STUDY-DERIVED COMPUTATIONS
+# ==================================================
+def compute_study_metrics(expr, clinical, pathway):
+    """
+    Compute derived metrics from the study data
+    """
+    metrics = {}
+    
+    # Gene expression metrics
+    log_expr = np.log2(expr + 1)
+    metrics['mean_gene_expression'] = log_expr.mean().mean()
+    metrics['median_gene_expression'] = log_expr.median().median()
+    metrics['gene_expression_variance'] = log_expr.var().mean()
+    
+    # Sample-wise metrics
+    meta = clinical.set_index(SAMPLE_ID_COL)
+    sens_samples = meta[meta["response"] == "Sensitive"].index
+    res_samples = meta[meta["response"] == "Resistant"].index
+    
+    metrics['sensitive_mean_expr'] = log_expr[sens_samples].mean().mean()
+    metrics['resistant_mean_expr'] = log_expr[res_samples].mean().mean()
+    metrics['expr_difference'] = metrics['sensitive_mean_expr'] - metrics['resistant_mean_expr']
+    
+    # Pathway metrics
+    log_pathway = np.log2(pathway + 1)
+    metrics['mean_pathway_activity'] = log_pathway.mean().mean()
+    metrics['pathway_variance'] = log_pathway.var().mean()
+    
+    # Differential expression metrics
+    de_df = compute_de(expr, clinical)
+    metrics['total_genes'] = len(de_df)
+    metrics['sig_genes_p005'] = (de_df['p_value'] < 0.05).sum()
+    metrics['sig_genes_p001'] = (de_df['p_value'] < 0.01).sum()
+    metrics['high_fc_genes'] = (abs(de_df['log2FC']) > 1).sum()
+    metrics['very_high_fc_genes'] = (abs(de_df['log2FC']) > 2).sum()
+    
+    # Expression distribution
+    metrics['genes_higher_sensitive'] = (de_df['direction'] == 'Higher in Sensitive').sum()
+    metrics['genes_higher_resistant'] = (de_df['direction'] == 'Higher in Resistant').sum()
+    
+    return metrics
+
+def compute_sample_profile(sample_id, expr, clinical, pathway):
+    """
+    Compute comprehensive profile for a specific sample
+    """
+    if sample_id not in expr.columns:
+        return None
+    
+    profile = {}
+    
+    # Basic info
+    meta = clinical.set_index(SAMPLE_ID_COL)
+    profile['sample_id'] = sample_id
+    profile['response'] = meta.loc[sample_id, 'response']
+    
+    # Gene expression stats
+    sample_expr = np.log2(expr[sample_id] + 1)
+    profile['mean_expression'] = sample_expr.mean()
+    profile['median_expression'] = sample_expr.median()
+    profile['max_expression'] = sample_expr.max()
+    profile['min_expression'] = sample_expr.min()
+    
+    # Top expressed genes
+    profile['top_5_genes'] = sample_expr.nlargest(5).to_dict()
+    
+    # Pathway activity
+    sample_pathway = np.log2(pathway[sample_id] + 1)
+    profile['mean_pathway_activity'] = sample_pathway.mean()
+    profile['top_5_pathways'] = sample_pathway.nlargest(5).to_dict()
+    
+    # Comparison to group
+    group_samples = meta[meta['response'] == profile['response']].index
+    group_expr = np.log2(expr[group_samples] + 1).mean(axis=1)
+    
+    profile['vs_group_correlation'] = sample_expr.corr(group_expr)
+    profile['deviation_from_group'] = (sample_expr - group_expr).abs().mean()
+    
+    return profile
+
+def compute_gene_profile(gene_name, expr, clinical):
+    """
+    Compute comprehensive profile for a specific gene
+    """
+    if gene_name not in expr.index:
+        return None
+    
+    profile = {}
+    profile['gene_name'] = gene_name
+    
+    # Expression stats
+    gene_expr = np.log2(expr.loc[gene_name] + 1)
+    profile['mean_expression'] = gene_expr.mean()
+    profile['median_expression'] = gene_expr.median()
+    profile['std_expression'] = gene_expr.std()
+    profile['cv'] = (gene_expr.std() / gene_expr.mean()) * 100 if gene_expr.mean() > 0 else 0
+    
+    # By response group
+    meta = clinical.set_index(SAMPLE_ID_COL)
+    sens_samples = meta[meta["response"] == "Sensitive"].index
+    res_samples = meta[meta["response"] == "Resistant"].index
+    
+    profile['sensitive_mean'] = gene_expr[sens_samples].mean()
+    profile['resistant_mean'] = gene_expr[res_samples].mean()
+    profile['fold_change'] = profile['sensitive_mean'] - profile['resistant_mean']
+    
+    # Statistical test
+    _, pval = ttest_ind(gene_expr[sens_samples], gene_expr[res_samples], equal_var=False)
+    profile['p_value'] = pval
+    profile['significant'] = pval < 0.05
+    
+    return profile
+
+def compute_pathway_profile(pathway_name, pathway, clinical):
+    """
+    Compute comprehensive profile for a specific pathway
+    """
+    if pathway_name not in pathway.index:
+        return None
+    
+    profile = {}
+    profile['pathway_name'] = pathway_name
+    
+    # Activity stats
+    pathway_activity = np.log2(pathway.loc[pathway_name] + 1)
+    profile['mean_activity'] = pathway_activity.mean()
+    profile['median_activity'] = pathway_activity.median()
+    profile['std_activity'] = pathway_activity.std()
+    
+    # By response group
+    meta = clinical.set_index(SAMPLE_ID_COL)
+    sens_samples = meta[meta["response"] == "Sensitive"].index
+    res_samples = meta[meta["response"] == "Resistant"].index
+    
+    profile['sensitive_mean'] = pathway_activity[sens_samples].mean()
+    profile['resistant_mean'] = pathway_activity[res_samples].mean()
+    profile['activity_difference'] = profile['sensitive_mean'] - profile['resistant_mean']
+    
+    # Statistical test
+    _, pval = ttest_ind(pathway_activity[sens_samples], pathway_activity[res_samples], equal_var=False)
+    profile['p_value'] = pval
+    profile['significant'] = pval < 0.05
+    
+    return profile
 
 # ==================================================
 # AUTO-INSIGHTS
@@ -554,7 +705,7 @@ def process_chatbot_command_study_search(command, index_df):
 # ==================================================
 # VISUALIZATION FUNCTIONS
 # ==================================================
-def make_pca(expr, clinical, selected):
+def make_pca(expr, clinical, selected, highlight_gene=None):
     X = expr.T
     X = X[expr.var(axis=1).sort_values(ascending=False).head(2000).index]
     X_scaled = StandardScaler().fit_transform(X)
@@ -565,17 +716,41 @@ def make_pca(expr, clinical, selected):
     df["sample"] = df.index
     df["response"] = clinical.set_index(SAMPLE_ID_COL).loc[df.index, "response"]
     
+    # Add gene expression if specified
+    if highlight_gene and highlight_gene in expr.index:
+        gene_values = np.log2(expr.loc[highlight_gene, df.index] + 1)
+        df[f"{highlight_gene}_expr"] = gene_values
+        hover_data = {"sample": True, "response": True, f"{highlight_gene}_expr": ":.3f"}
+        color = f"{highlight_gene}_expr"
+        color_scale = "Viridis"
+        title_suffix = f" (colored by {highlight_gene})"
+    else:
+        hover_data = {"sample": True, "response": True}
+        color = "response"
+        color_scale = None
+        title_suffix = ""
+    
     sil = silhouette_score(X_scaled, df["response"].map({"Sensitive": 0, "Resistant": 1}))
-    fig = px.scatter(df, x="PC1", y="PC2", color="response", hover_name="sample",
-                     title=f"PCA (Silhouette = {sil:.3f})", color_discrete_map=RESPONSE_COLORS)
+    
+    if color_scale:
+        fig = px.scatter(df, x="PC1", y="PC2", color=color, hover_name="sample",
+                        hover_data=hover_data, title=f"PCA (Silhouette = {sil:.3f}){title_suffix}",
+                        color_continuous_scale=color_scale)
+    else:
+        fig = px.scatter(df, x="PC1", y="PC2", color=color, hover_name="sample",
+                        hover_data=hover_data, title=f"PCA (Silhouette = {sil:.3f}){title_suffix}",
+                        color_discrete_map=RESPONSE_COLORS)
+    
     fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font=dict(size=12))
     
     if selected and selected in df["sample"].values:
         sel = df[df["sample"] == selected]
-        fig.add_scatter(x=sel.PC1, y=sel.PC2, marker=dict(size=16, symbol="star", color="black"), name="Selected")
+        fig.add_scatter(x=sel.PC1, y=sel.PC2, marker=dict(size=20, symbol="star", 
+                       color="gold", line=dict(color="black", width=2)), 
+                       name=f"Selected: {selected}", showlegend=True)
     return fig
 
-def make_umap(expr, clinical, selected):
+def make_umap(expr, clinical, selected, highlight_gene=None):
     X = expr.T
     X = X[expr.var(axis=1).sort_values(ascending=False).head(2000).index]
     X_scaled = StandardScaler().fit_transform(X)
@@ -585,13 +760,36 @@ def make_umap(expr, clinical, selected):
     df["sample"] = df.index
     df["response"] = clinical.set_index(SAMPLE_ID_COL).loc[df.index, "response"]
     
-    fig = px.scatter(df, x="UMAP1", y="UMAP2", color="response", hover_name="sample",
-                     title="UMAP", color_discrete_map=RESPONSE_COLORS)
+    # Add gene expression if specified
+    if highlight_gene and highlight_gene in expr.index:
+        gene_values = np.log2(expr.loc[highlight_gene, df.index] + 1)
+        df[f"{highlight_gene}_expr"] = gene_values
+        hover_data = {"sample": True, "response": True, f"{highlight_gene}_expr": ":.3f"}
+        color = f"{highlight_gene}_expr"
+        color_scale = "Viridis"
+        title_suffix = f" (colored by {highlight_gene})"
+    else:
+        hover_data = {"sample": True, "response": True}
+        color = "response"
+        color_scale = None
+        title_suffix = ""
+    
+    if color_scale:
+        fig = px.scatter(df, x="UMAP1", y="UMAP2", color=color, hover_name="sample",
+                        hover_data=hover_data, title=f"UMAP{title_suffix}",
+                        color_continuous_scale=color_scale)
+    else:
+        fig = px.scatter(df, x="UMAP1", y="UMAP2", color=color, hover_name="sample",
+                        hover_data=hover_data, title=f"UMAP{title_suffix}",
+                        color_discrete_map=RESPONSE_COLORS)
+    
     fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font=dict(size=12))
     
     if selected and selected in df["sample"].values:
         sel = df[df["sample"] == selected]
-        fig.add_scatter(x=sel.UMAP1, y=sel.UMAP2, marker=dict(size=16, symbol="star", color="black"), name="Selected")
+        fig.add_scatter(x=sel.UMAP1, y=sel.UMAP2, marker=dict(size=20, symbol="star",
+                       color="gold", line=dict(color="black", width=2)),
+                       name=f"Selected: {selected}", showlegend=True)
     return fig
 
 def make_volcano(expr, clinical):
@@ -638,7 +836,7 @@ def interactive_binary_clinical_heatmap(clinical, expr, selected):
     fig = px.imshow(mat, aspect="auto", color_continuous_scale=[[0.0, "#d62728"], [1.0, "#1f77b4"]],
                     title="Clinical Response Heatmap")
     if selected and selected in mat.columns:
-        fig.add_vline(x=list(mat.columns).index(selected), line_width=3, line_color="black")
+        fig.add_vline(x=list(mat.columns).index(selected), line_width=3, line_color="gold")
     fig.update_layout(xaxis_title="Samples", yaxis_title="Response", plot_bgcolor='white', paper_bgcolor='white')
     return fig
 
@@ -653,12 +851,36 @@ def static_clustermap_png(data, title):
     buf.seek(0)
     return buf.getvalue()
 
-def interactive_heatmap(data, title, selected):
+def interactive_heatmap(data, title, selected, highlight_feature=None):
+    """
+    Enhanced heatmap with optional feature highlighting
+    """
     z = (data - data.mean(axis=1).values[:, None]) / data.std(axis=1).values[:, None]
-    z = z.dropna().loc[data.var(axis=1).sort_values(ascending=False).head(100).index]
+    z = z.dropna()
+    
+    # If specific feature is requested, show it prominently
+    if highlight_feature and highlight_feature in z.index:
+        # Get top variable features
+        top_features = data.var(axis=1).sort_values(ascending=False).head(99).index
+        # Ensure highlighted feature is included
+        if highlight_feature not in top_features:
+            top_features = list(top_features[:98]) + [highlight_feature]
+        else:
+            top_features = list(top_features)
+        z = z.loc[top_features]
+    else:
+        z = z.loc[data.var(axis=1).sort_values(ascending=False).head(100).index]
+    
     fig = px.imshow(z, aspect="auto", title=title, color_continuous_scale="RdBu_r")
+    
+    # Highlight selected sample
     if selected and selected in z.columns:
-        fig.add_vline(x=list(z.columns).index(selected), line_width=3)
+        fig.add_vline(x=list(z.columns).index(selected), line_width=3, line_color="gold")
+    
+    # Highlight feature if specified
+    if highlight_feature and highlight_feature in z.index:
+        fig.add_hline(y=list(z.index).index(highlight_feature), line_width=3, line_color="lime")
+    
     fig.update_layout(plot_bgcolor='white', paper_bgcolor='white')
     return fig
 
@@ -720,8 +942,9 @@ def render_metric_cards(stats):
 # ==================================================
 def render_login():
     render_sticky_header("login")
-    st.title("🔐 Clinical-Omics Explorer")
-    st.markdown("### Please enter the password to access the application")
+    # CHANGE 1: Gene/DNA symbol instead of lock
+    st.title("🧬 Clinical-Omics Explorer")
+    st.markdown("### Computational Biology & Genomics Analysis Platform")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         password = st.text_input("Password", type="password", key="password_input")
@@ -785,6 +1008,7 @@ def render_study_selection():
         st.warning("⚠️ No studies available in database.")
 
 def render_intro():
+    # CHANGE 3: No changes - keep as is
     render_sticky_header("intro")
     study_id = st.session_state.get("selected_study", "GSE41998")
     info = STUDY_INFO.get(study_id, STUDY_INFO["GSE41998"])
@@ -804,6 +1028,7 @@ def render_intro():
 
 
 def render_dashboard():
+    # CHANGE 4: Enhanced dashboard with computations and visualization features
     study_id = st.session_state.get("selected_study", "GSE41998")
     render_sticky_header("dashboard", study_id)
     
@@ -837,7 +1062,7 @@ def render_dashboard():
         fc_default = 0.5
 
     # Advanced Filters Panel
-    with st.expander("🔍 Advanced Filters", expanded=False):
+    with st.expander("🔍 Advanced Filters & Feature Selection", expanded=False):
         st.markdown('<div class="filter-panel">', unsafe_allow_html=True)
         filter_col1, filter_col2, filter_col3 = st.columns(3)
         
@@ -856,12 +1081,27 @@ def render_dashboard():
                 sample_idx = sample_options.index(sample_default)
             else:
                 sample_idx = 0
-            sample = st.selectbox("🔬 Sample", sample_options, index=sample_idx, key="filter_sample")
+            sample = st.selectbox("🔬 Sample", sample_options, index=sample_idx, key="filter_sample",
+                                 help="Select a specific sample to highlight in visualizations")
         
         with filter_col3:
             response_filter = st.multiselect("📊 Response Filter", ["Sensitive", "Resistant"],
                                             default=["Sensitive", "Resistant"], key="filter_response")
         
+        st.markdown("#### Visualization Feature Selection")
+        vis_col1, vis_col2 = st.columns(2)
+        
+        with vis_col1:
+            gene_options = ["None"] + sorted(list(expr.index))
+            selected_gene = st.selectbox("🧬 Highlight Gene", gene_options, key="selected_gene",
+                                        help="Select a gene to highlight in PCA/UMAP and heatmaps")
+        
+        with vis_col2:
+            pathway_options = ["None"] + sorted(list(pathway.index))
+            selected_pathway = st.selectbox("🔗 Highlight Pathway", pathway_options, key="selected_pathway",
+                                           help="Select a pathway to highlight in pathway heatmap")
+        
+        st.markdown("#### Differential Expression Thresholds")
         filter_col4, filter_col5 = st.columns(2)
         with filter_col4:
             pval_threshold = st.slider("P-value Threshold", 0.0, 0.1, pval_default, 0.01,
@@ -872,206 +1112,379 @@ def render_dashboard():
         st.markdown('</div>', unsafe_allow_html=True)
     
     selected = None if sample == "ALL" else sample
+    highlight_gene = None if selected_gene == "None" else selected_gene
+    highlight_pathway = None if selected_pathway == "None" else selected_pathway
     
-    # Summary Statistics
-    st.markdown("### 📊 Summary Statistics")
-    stats = compute_summary_stats(clinical, expr)
-    de_df = compute_de(expr, clinical)
-    render_metric_cards(stats)
+    # Main Analysis Mode Tabs
+    tab1, tab2 = st.tabs(["📊 Standard Analysis", "🧮 Study Computations"])
     
-    st.divider()
-    col_info1, col_info2 = st.columns(2)
-    with col_info1:
-        st.info(f"**Top Differential Gene:** {stats['top_gene']} (p={stats['top_gene_pval']:.2e})")
-    with col_info2:
-        st.info(f"**Data:** {len(expr)} genes × {len(expr.columns)} samples")
-    
-    st.divider()
-    
-    # Auto-Generated Insights
-    st.markdown("### 🤖 AI-Generated Insights")
-    insights = generate_auto_insights(stats, de_df, clinical, expr)
-    for insight in insights:
-        if insight['type'] == 'success':
-            st.success(f"**{insight['title']}**: {insight['text']}")
-        elif insight['type'] == 'warning':
-            st.warning(f"**{insight['title']}**: {insight['text']}")
-        else:
-            st.info(f"**{insight['title']}**: {insight['text']}")
-    
-    st.divider()
-    
-    # Session Management & PDF Report
-    col_session, col_pdf = st.columns(2)
-    
-    with col_session:
-        with st.expander("💾 Session Management"):
-            col_save, col_load = st.columns(2)
-            with col_save:
-                st.markdown("**Save Current Session**")
-                session_name = st.text_input("Session Name", placeholder="My Analysis", key="session_name_input")
-                session_notes = st.text_area("Notes (optional)", key="session_notes", height=80)
-                if st.button("Save Session", key="save_session_btn"):
-                    if session_name:
-                        save_session(session_name, {
-                            'study_id': study_id, 'drug': drug, 'sample': sample,
-                            'pval_threshold': pval_threshold, 'fc_threshold': fc_threshold,
-                            'notes': session_notes
-                        })
-                        st.success(f"✅ Session '{session_name}' saved!")
-            
-            with col_load:
-                st.markdown("**Load Saved Session**")
-                sessions = get_session_list()
-                if sessions:
-                    selected_session = st.selectbox("Select Session", sessions, key="session_select")
-                    if st.button("Load Session", key="load_session_btn"):
-                        data = load_session(selected_session)
-                        if data:
-                            st.session_state.loaded_session = data
-                            st.success(f"✅ Loaded '{selected_session}'")
-                            st.rerun()
-                    if st.button("Delete Session", key="delete_session_btn"):
-                        if delete_session(selected_session):
-                            st.success(f"🗑️ Deleted '{selected_session}'")
-                            st.rerun()
+    with tab1:
+        # Summary Statistics
+        st.markdown("### 📊 Summary Statistics")
+        stats = compute_summary_stats(clinical, expr)
+        de_df = compute_de(expr, clinical)
+        render_metric_cards(stats)
+        
+        st.divider()
+        col_info1, col_info2 = st.columns(2)
+        with col_info1:
+            st.info(f"**Top Differential Gene:** {stats['top_gene']} (p={stats['top_gene_pval']:.2e})")
+        with col_info2:
+            st.info(f"**Data:** {len(expr)} genes × {len(expr.columns)} samples")
+        
+        st.divider()
+        
+        # Auto-Generated Insights
+        st.markdown("### 🤖 AI-Generated Insights")
+        insights = generate_auto_insights(stats, de_df, clinical, expr)
+        for insight in insights:
+            if insight['type'] == 'success':
+                st.success(f"**{insight['title']}**: {insight['text']}")
+            elif insight['type'] == 'warning':
+                st.warning(f"**{insight['title']}**: {insight['text']}")
+            else:
+                st.info(f"**{insight['title']}**: {insight['text']}")
+        
+        st.divider()
+        
+        # Session Management & PDF Report
+        col_session, col_pdf = st.columns(2)
+        
+        with col_session:
+            with st.expander("💾 Session Management"):
+                col_save, col_load = st.columns(2)
+                with col_save:
+                    st.markdown("**Save Current Session**")
+                    session_name = st.text_input("Session Name", placeholder="My Analysis", key="session_name_input")
+                    session_notes = st.text_area("Notes (optional)", key="session_notes", height=80)
+                    if st.button("Save Session", key="save_session_btn"):
+                        if session_name:
+                            save_session(session_name, {
+                                'study_id': study_id, 'drug': drug, 'sample': sample,
+                                'pval_threshold': pval_threshold, 'fc_threshold': fc_threshold,
+                                'notes': session_notes
+                            })
+                            st.success(f"✅ Session '{session_name}' saved!")
+                
+                with col_load:
+                    st.markdown("**Load Saved Session**")
+                    sessions = get_session_list()
+                    if sessions:
+                        selected_session = st.selectbox("Select Session", sessions, key="session_select")
+                        if st.button("Load Session", key="load_session_btn"):
+                            data = load_session(selected_session)
+                            if data:
+                                st.session_state.loaded_session = data
+                                st.success(f"✅ Loaded '{selected_session}'")
+                                st.rerun()
+                        if st.button("Delete Session", key="delete_session_btn"):
+                            if delete_session(selected_session):
+                                st.success(f"🗑️ Deleted '{selected_session}'")
+                                st.rerun()
+                    else:
+                        st.info("No saved sessions yet")
+        
+        with col_pdf:
+            with st.expander("📄 PDF Report"):
+                if PDF_AVAILABLE:
+                    st.markdown("**Generate Comprehensive Report**")
+                    st.info("Includes: Summary stats, top genes, and AI insights")
+                    if st.button("📄 Generate PDF Report", use_container_width=True, key="gen_pdf_btn"):
+                        with st.spinner("Generating PDF..."):
+                            pdf_data = generate_pdf_report(study_id, drug, stats, de_df)
+                            if pdf_data:
+                                st.download_button("💾 Download PDF Report", pdf_data,
+                                                 f"{study_id}_{drug}_Report.pdf", "application/pdf",
+                                                 key="download_pdf_btn")
+                                st.success("✅ PDF Generated!")
                 else:
-                    st.info("No saved sessions yet")
-    
-    with col_pdf:
-        with st.expander("📄 PDF Report"):
-            if PDF_AVAILABLE:
-                st.markdown("**Generate Comprehensive Report**")
-                st.info("Includes: Summary stats, top genes, and AI insights")
-                if st.button("📄 Generate PDF Report", use_container_width=True, key="gen_pdf_btn"):
-                    with st.spinner("Generating PDF..."):
-                        pdf_data = generate_pdf_report(study_id, drug, stats, de_df)
-                        if pdf_data:
-                            st.download_button("💾 Download PDF Report", pdf_data,
-                                             f"{study_id}_{drug}_Report.pdf", "application/pdf",
-                                             key="download_pdf_btn")
-                            st.success("✅ PDF Generated!")
-            else:
-                st.warning("PDF generation unavailable. Install reportlab library.")
-    
-    st.divider()
-    
-    # Plot Controls
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        plot = st.selectbox("📈 Select Visualization",
-                           ["All plots", "PCA", "UMAP", "Clinical Heatmap", "Gene Heatmap",
-                            "Pathway Heatmap", "Volcano", "MA", "Gene Expression Table"],
-                           key="plot_selector")
-    with col2:
-        heatmap_mode = st.radio("Heatmap Mode", ["static", "interactive"], horizontal=True, key="heatmap_mode")
-    
-    generate_plots = st.button("🎨 Generate Plots", type="primary", use_container_width=True, key="generate_btn")
-    
-    st.divider()
-    
-    # Main Plotting Area
-    if generate_plots:
-        def render_heatmap(data, title):
-            if heatmap_mode == "static":
-                st.image(static_clustermap_png(data, title), use_container_width=True)
-            else:
-                fig = interactive_heatmap(data, title, selected)
-                st.plotly_chart(fig, use_container_width=True)
-                col_dl1, col_dl2 = st.columns([1, 4])
-                with col_dl1:
-                    if st.button("📥 Download PNG", key=f"download_{title}"):
-                        img_bytes = fig_to_bytes(fig, 'png')
+                    st.warning("PDF generation unavailable. Install reportlab library.")
+        
+        st.divider()
+        
+        # Plot Controls
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            plot = st.selectbox("📈 Select Visualization",
+                               ["All plots", "PCA", "UMAP", "Clinical Heatmap", "Gene Heatmap",
+                                "Pathway Heatmap", "Volcano", "MA", "Gene Expression Table"],
+                               key="plot_selector")
+        with col2:
+            heatmap_mode = st.radio("Heatmap Mode", ["static", "interactive"], horizontal=True, key="heatmap_mode")
+        
+        generate_plots = st.button("🎨 Generate Plots", type="primary", use_container_width=True, key="generate_btn")
+        
+        st.divider()
+        
+        # Main Plotting Area
+        if generate_plots:
+            def render_heatmap(data, title, highlight_feature=None):
+                if heatmap_mode == "static":
+                    st.image(static_clustermap_png(data, title), use_container_width=True)
+                else:
+                    fig = interactive_heatmap(data, title, selected, highlight_feature)
+                    st.plotly_chart(fig, use_container_width=True)
+                    col_dl1, col_dl2 = st.columns([1, 4])
+                    with col_dl1:
+                        if st.button("📥 Download PNG", key=f"download_{title}"):
+                            img_bytes = fig_to_bytes(fig, 'png')
+                            if img_bytes:
+                                st.download_button("💾 Save", img_bytes, f"{title.replace(' ', '_')}.png",
+                                                 "image/png", key=f"save_{title}")
+            
+            if plot == "All plots":
+                st.markdown("### Dimensionality Reduction")
+                c1, c2 = st.columns(2)
+                with c1:
+                    fig_pca = make_pca(expr, clinical, selected, highlight_gene)
+                    st.plotly_chart(fig_pca, use_container_width=True)
+                    if st.button("📥 Download PCA", key="dl_pca"):
+                        img_bytes = fig_to_bytes(fig_pca)
                         if img_bytes:
-                            st.download_button("💾 Save", img_bytes, f"{title.replace(' ', '_')}.png",
-                                             "image/png", key=f"save_{title}")
-        
-        if plot == "All plots":
-            st.markdown("### Dimensionality Reduction")
-            c1, c2 = st.columns(2)
-            with c1:
-                fig_pca = make_pca(expr, clinical, selected)
-                st.plotly_chart(fig_pca, use_container_width=True)
-                if st.button("📥 Download PCA", key="dl_pca"):
-                    img_bytes = fig_to_bytes(fig_pca)
-                    if img_bytes:
-                        st.download_button("💾 Save PCA", img_bytes, "pca_plot.png", "image/png", key="save_pca")
-            with c2:
-                fig_umap = make_umap(expr, clinical, selected)
-                st.plotly_chart(fig_umap, use_container_width=True)
-                if st.button("📥 Download UMAP", key="dl_umap"):
-                    img_bytes = fig_to_bytes(fig_umap)
-                    if img_bytes:
-                        st.download_button("💾 Save UMAP", img_bytes, "umap_plot.png", "image/png", key="save_umap")
+                            st.download_button("💾 Save PCA", img_bytes, "pca_plot.png", "image/png", key="save_pca")
+                with c2:
+                    fig_umap = make_umap(expr, clinical, selected, highlight_gene)
+                    st.plotly_chart(fig_umap, use_container_width=True)
+                    if st.button("📥 Download UMAP", key="dl_umap"):
+                        img_bytes = fig_to_bytes(fig_umap)
+                        if img_bytes:
+                            st.download_button("💾 Save UMAP", img_bytes, "umap_plot.png", "image/png", key="save_umap")
+                
+                st.divider()
+                st.markdown("### Clinical Response")
+                if heatmap_mode == "static":
+                    st.image(static_binary_clinical_heatmap(clinical, expr), use_container_width=True)
+                else:
+                    fig_clinical = interactive_binary_clinical_heatmap(clinical, expr, selected)
+                    st.plotly_chart(fig_clinical, use_container_width=True)
+                
+                st.divider()
+                st.markdown("### Gene Expression")
+                render_heatmap(expr, "Gene Expression Heatmap", highlight_gene)
+                
+                st.divider()
+                st.markdown("### Pathway Activity")
+                render_heatmap(pathway, "Pathway Heatmap", highlight_pathway)
+                
+                st.divider()
+                st.markdown("### Differential Expression")
+                c3, c4 = st.columns(2)
+                with c3:
+                    fig_volcano = make_volcano(expr, clinical)
+                    st.plotly_chart(fig_volcano, use_container_width=True)
+                with c4:
+                    fig_ma = make_ma(expr, clinical)
+                    st.plotly_chart(fig_ma, use_container_width=True)
             
-            st.divider()
-            st.markdown("### Clinical Response")
-            if heatmap_mode == "static":
-                st.image(static_binary_clinical_heatmap(clinical, expr), use_container_width=True)
-            else:
-                fig_clinical = interactive_binary_clinical_heatmap(clinical, expr, selected)
-                st.plotly_chart(fig_clinical, use_container_width=True)
-            
-            st.divider()
-            st.markdown("### Gene Expression")
-            render_heatmap(expr, "Gene Expression Heatmap")
-            
-            st.divider()
-            st.markdown("### Pathway Activity")
-            render_heatmap(pathway, "Pathway Heatmap")
-            
-            st.divider()
-            st.markdown("### Differential Expression")
-            c3, c4 = st.columns(2)
-            with c3:
-                fig_volcano = make_volcano(expr, clinical)
-                st.plotly_chart(fig_volcano, use_container_width=True)
-            with c4:
-                fig_ma = make_ma(expr, clinical)
-                st.plotly_chart(fig_ma, use_container_width=True)
-        
-        elif plot == "PCA":
-            fig = make_pca(expr, clinical, selected)
-            st.plotly_chart(fig, use_container_width=True)
-        elif plot == "UMAP":
-            fig = make_umap(expr, clinical, selected)
-            st.plotly_chart(fig, use_container_width=True)
-        elif plot == "Clinical Heatmap":
-            if heatmap_mode == "static":
-                st.image(static_binary_clinical_heatmap(clinical, expr), use_container_width=True)
-            else:
-                fig = interactive_binary_clinical_heatmap(clinical, expr, selected)
+            elif plot == "PCA":
+                fig = make_pca(expr, clinical, selected, highlight_gene)
                 st.plotly_chart(fig, use_container_width=True)
-        elif plot == "Gene Heatmap":
-            render_heatmap(expr, "Gene Expression Heatmap")
-        elif plot == "Pathway Heatmap":
-            render_heatmap(pathway, "Pathway Heatmap")
-        elif plot == "Volcano":
-            fig = make_volcano(expr, clinical)
-            st.plotly_chart(fig, use_container_width=True)
-        elif plot == "MA":
-            fig = make_ma(expr, clinical)
-            st.plotly_chart(fig, use_container_width=True)
-        elif plot == "Gene Expression Table":
-            st.markdown("### 📋 Gene Expression Data Table")
-            filtered_df = de_df[(de_df['p_value'] <= pval_threshold) & (abs(de_df['log2FC']) >= fc_threshold)].copy()
-            st.info(f"Showing {len(filtered_df)} genes (filtered from {len(de_df)} total)")
-            search_term = st.text_input("🔍 Search genes", placeholder="Enter gene name...", key="gene_search")
-            if search_term:
-                filtered_df = filtered_df[filtered_df['gene'].str.contains(search_term, case=False, na=False)]
-            display_cols = ['gene', 'log2FC', 'p_value', 'avg_expr', 'direction']
-            st.dataframe(filtered_df[display_cols].sort_values('p_value'), use_container_width=True, hide_index=True, height=400)
-            csv = filtered_df[display_cols].to_csv(index=False)
-            st.download_button("📥 Download Table as CSV", csv, "gene_expression_table.csv", "text/csv", key="download_table")
-    else:
-        st.info("👆 Select your options and click 'Generate Plots' to visualize the data.")
+            elif plot == "UMAP":
+                fig = make_umap(expr, clinical, selected, highlight_gene)
+                st.plotly_chart(fig, use_container_width=True)
+            elif plot == "Clinical Heatmap":
+                if heatmap_mode == "static":
+                    st.image(static_binary_clinical_heatmap(clinical, expr), use_container_width=True)
+                else:
+                    fig = interactive_binary_clinical_heatmap(clinical, expr, selected)
+                    st.plotly_chart(fig, use_container_width=True)
+            elif plot == "Gene Heatmap":
+                render_heatmap(expr, "Gene Expression Heatmap", highlight_gene)
+            elif plot == "Pathway Heatmap":
+                render_heatmap(pathway, "Pathway Heatmap", highlight_pathway)
+            elif plot == "Volcano":
+                fig = make_volcano(expr, clinical)
+                st.plotly_chart(fig, use_container_width=True)
+            elif plot == "MA":
+                fig = make_ma(expr, clinical)
+                st.plotly_chart(fig, use_container_width=True)
+            elif plot == "Gene Expression Table":
+                st.markdown("### 📋 Gene Expression Data Table")
+                filtered_df = de_df[(de_df['p_value'] <= pval_threshold) & (abs(de_df['log2FC']) >= fc_threshold)].copy()
+                st.info(f"Showing {len(filtered_df)} genes (filtered from {len(de_df)} total)")
+                search_term = st.text_input("🔍 Search genes", placeholder="Enter gene name...", key="gene_search")
+                if search_term:
+                    filtered_df = filtered_df[filtered_df['gene'].str.contains(search_term, case=False, na=False)]
+                display_cols = ['gene', 'log2FC', 'p_value', 'avg_expr', 'direction']
+                st.dataframe(filtered_df[display_cols].sort_values('p_value'), use_container_width=True, hide_index=True, height=400)
+                csv = filtered_df[display_cols].to_csv(index=False)
+                st.download_button("📥 Download Table as CSV", csv, "gene_expression_table.csv", "text/csv", key="download_table")
+        else:
+            st.info("👆 Select your options and click 'Generate Plots' to visualize the data.")
+    
+    with tab2:
+        # CHANGE 4: New Computation Tab
+        st.markdown("### 🧮 Study-Derived Computations")
+        st.info("This section provides computed metrics derived from the current study data")
+        
+        comp_mode = st.radio("Select Computation Mode", 
+                            ["Study-Level Metrics", "Sample Profile", "Gene Profile", "Pathway Profile"],
+                            horizontal=True, key="comp_mode")
+        
+        if comp_mode == "Study-Level Metrics":
+            st.markdown("#### Overall Study Statistics")
+            if st.button("🔄 Compute Study Metrics", type="primary"):
+                with st.spinner("Computing metrics..."):
+                    metrics = compute_study_metrics(expr, clinical, pathway)
+                    
+                    st.markdown('<div class="computation-panel">', unsafe_allow_html=True)
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Mean Gene Expression", f"{metrics['mean_gene_expression']:.3f}")
+                        st.metric("Median Gene Expression", f"{metrics['median_gene_expression']:.3f}")
+                        st.metric("Gene Expression Variance", f"{metrics['gene_expression_variance']:.3f}")
+                    
+                    with col2:
+                        st.metric("Sensitive Group Mean Expr", f"{metrics['sensitive_mean_expr']:.3f}")
+                        st.metric("Resistant Group Mean Expr", f"{metrics['resistant_mean_expr']:.3f}")
+                        st.metric("Expression Difference", f"{metrics['expr_difference']:.3f}")
+                    
+                    with col3:
+                        st.metric("Mean Pathway Activity", f"{metrics['mean_pathway_activity']:.3f}")
+                        st.metric("Pathway Variance", f"{metrics['pathway_variance']:.3f}")
+                        st.metric("Total Genes", f"{metrics['total_genes']}")
+                    
+                    st.markdown("#### Differential Expression Summary")
+                    col4, col5, col6 = st.columns(3)
+                    with col4:
+                        st.metric("Significant (p<0.05)", f"{metrics['sig_genes_p005']}")
+                        st.metric("Highly Significant (p<0.01)", f"{metrics['sig_genes_p001']}")
+                    with col5:
+                        st.metric("High FC Genes (|FC|>1)", f"{metrics['high_fc_genes']}")
+                        st.metric("Very High FC (|FC|>2)", f"{metrics['very_high_fc_genes']}")
+                    with col6:
+                        st.metric("Higher in Sensitive", f"{metrics['genes_higher_sensitive']}")
+                        st.metric("Higher in Resistant", f"{metrics['genes_higher_resistant']}")
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Export option
+                    metrics_df = pd.DataFrame([metrics]).T
+                    metrics_df.columns = ['Value']
+                    csv = metrics_df.to_csv()
+                    st.download_button("📥 Download Metrics as CSV", csv, 
+                                      f"{study_id}_{drug}_metrics.csv", "text/csv")
+        
+        elif comp_mode == "Sample Profile":
+            st.markdown("#### Individual Sample Analysis")
+            sample_to_analyze = st.selectbox("Select Sample", expr.columns, key="sample_compute")
+            
+            if st.button("🔄 Compute Sample Profile", type="primary"):
+                with st.spinner(f"Analyzing sample {sample_to_analyze}..."):
+                    profile = compute_sample_profile(sample_to_analyze, expr, clinical, pathway)
+                    
+                    if profile:
+                        st.markdown('<div class="computation-panel">', unsafe_allow_html=True)
+                        
+                        st.markdown(f"### Sample: {profile['sample_id']}")
+                        st.markdown(f"**Response:** {profile['response']}")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("#### Gene Expression Profile")
+                            st.metric("Mean Expression", f"{profile['mean_expression']:.3f}")
+                            st.metric("Median Expression", f"{profile['median_expression']:.3f}")
+                            st.metric("Max Expression", f"{profile['max_expression']:.3f}")
+                            st.metric("Min Expression", f"{profile['min_expression']:.3f}")
+                            
+                            st.markdown("**Top 5 Expressed Genes:**")
+                            for gene, val in profile['top_5_genes'].items():
+                                st.text(f"{gene}: {val:.3f}")
+                        
+                        with col2:
+                            st.markdown("#### Pathway Activity Profile")
+                            st.metric("Mean Pathway Activity", f"{profile['mean_pathway_activity']:.3f}")
+                            
+                            st.markdown("**Top 5 Active Pathways:**")
+                            for pw, val in profile['top_5_pathways'].items():
+                                st.text(f"{pw}: {val:.3f}")
+                            
+                            st.markdown("#### Comparison to Group")
+                            st.metric("Correlation with Group", f"{profile['vs_group_correlation']:.3f}")
+                            st.metric("Deviation from Group", f"{profile['deviation_from_group']:.3f}")
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    else:
+                        st.error("Could not compute profile for this sample")
+        
+        elif comp_mode == "Gene Profile":
+            st.markdown("#### Individual Gene Analysis")
+            gene_to_analyze = st.selectbox("Select Gene", sorted(expr.index), key="gene_compute")
+            
+            if st.button("🔄 Compute Gene Profile", type="primary"):
+                with st.spinner(f"Analyzing gene {gene_to_analyze}..."):
+                    profile = compute_gene_profile(gene_to_analyze, expr, clinical)
+                    
+                    if profile:
+                        st.markdown('<div class="computation-panel">', unsafe_allow_html=True)
+                        
+                        st.markdown(f"### Gene: {profile['gene_name']}")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("#### Expression Statistics")
+                            st.metric("Mean Expression", f"{profile['mean_expression']:.3f}")
+                            st.metric("Median Expression", f"{profile['median_expression']:.3f}")
+                            st.metric("Std Dev", f"{profile['std_expression']:.3f}")
+                            st.metric("Coefficient of Variation", f"{profile['cv']:.2f}%")
+                        
+                        with col2:
+                            st.markdown("#### Response Group Comparison")
+                            st.metric("Sensitive Mean", f"{profile['sensitive_mean']:.3f}")
+                            st.metric("Resistant Mean", f"{profile['resistant_mean']:.3f}")
+                            st.metric("Fold Change (Log2)", f"{profile['fold_change']:.3f}")
+                            st.metric("P-value", f"{profile['p_value']:.2e}")
+                            if profile['significant']:
+                                st.success("✅ Statistically Significant (p<0.05)")
+                            else:
+                                st.warning("⚠️ Not Significant (p≥0.05)")
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    else:
+                        st.error("Could not compute profile for this gene")
+        
+        elif comp_mode == "Pathway Profile":
+            st.markdown("#### Individual Pathway Analysis")
+            pathway_to_analyze = st.selectbox("Select Pathway", sorted(pathway.index), key="pathway_compute")
+            
+            if st.button("🔄 Compute Pathway Profile", type="primary"):
+                with st.spinner(f"Analyzing pathway {pathway_to_analyze}..."):
+                    profile = compute_pathway_profile(pathway_to_analyze, pathway, clinical)
+                    
+                    if profile:
+                        st.markdown('<div class="computation-panel">', unsafe_allow_html=True)
+                        
+                        st.markdown(f"### Pathway: {profile['pathway_name']}")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("#### Activity Statistics")
+                            st.metric("Mean Activity", f"{profile['mean_activity']:.3f}")
+                            st.metric("Median Activity", f"{profile['median_activity']:.3f}")
+                            st.metric("Std Dev", f"{profile['std_activity']:.3f}")
+                        
+                        with col2:
+                            st.markdown("#### Response Group Comparison")
+                            st.metric("Sensitive Mean", f"{profile['sensitive_mean']:.3f}")
+                            st.metric("Resistant Mean", f"{profile['resistant_mean']:.3f}")
+                            st.metric("Activity Difference", f"{profile['activity_difference']:.3f}")
+                            st.metric("P-value", f"{profile['p_value']:.2e}")
+                            if profile['significant']:
+                                st.success("✅ Statistically Significant (p<0.05)")
+                            else:
+                                st.warning("⚠️ Not Significant (p≥0.05)")
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    else:
+                        st.error("Could not compute profile for this pathway")
 
 
 # ==================================================
 # MAIN APPLICATION
 # ==================================================
 def main():
-    st.set_page_config(page_title="Clinical-Omics Explorer - Ultimate Edition", 
+    st.set_page_config(page_title="Clinical-Omics Explorer - Refined Edition", 
                        layout="wide", initial_sidebar_state="auto")
     
     # Initialize session state
@@ -1084,7 +1497,7 @@ def main():
     if 'theme' not in st.session_state:
         st.session_state.theme = load_theme()
     
-    # Theme toggle in sidebar
+    # CHANGE 2: Simplified sidebar without version/features
     if st.session_state.authenticated:
         with st.sidebar:
             st.markdown("### ⚙️ Settings")
@@ -1100,21 +1513,6 @@ def main():
             st.markdown("---")
             st.markdown("**Current Theme:**")
             st.info(f"{'🌙 Dark' if current_theme == 'dark' else '☀️ Light'}")
-            
-            # Version info
-            st.markdown("---")
-            st.markdown("**Version:** 4.0 Ultimate Edition")
-            st.markdown("**Features:**")
-            st.markdown("✅ Password Protection")
-            st.markdown("✅ Study Validation")
-            st.markdown("✅ Advanced Filters")
-            st.markdown("✅ Interactive Tables")
-            st.markdown("✅ Export Plots & Data")
-            st.markdown("✅ PDF Reports")
-            st.markdown("✅ Dark Mode")
-            st.markdown("✅ Saved Sessions")
-            st.markdown("✅ Auto Insights")
-            st.markdown("✅ Enhanced NLP Chatbot")
     
     # Apply theme
     apply_custom_css(st.session_state.theme)
